@@ -3,5 +3,5 @@ install/
 log/
 __pycache__*/
 .vscode/
-COLCON_IGNORE
+# COLCON_IGNORE
 *metadata.json
