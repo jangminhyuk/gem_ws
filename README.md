@@ -18,6 +18,7 @@ ros2 launch basic_launch sensor_init.launch.py
 ```
 
 # launch corner cameras
+IMPORTANT: Because of the e4 incident, the corner cameras are not compatible with this backup PC, so corner cameras will not work.  
 ```bash
 source install/setup.bash
 ros2 launch basic_launch corner_cameras.launch.py
