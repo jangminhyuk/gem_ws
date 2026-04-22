@@ -1,6 +1,6 @@
 # the installation script place
 set(_arena_sdk_conf "/etc/ld.so.conf.d/Arena_SDK.conf")
-
+set(ARENA_ROOT_DIR "/opt/ArenaSDK")
 if (EXISTS ${_arena_sdk_conf})
 
     ###### --------------------------------------------------------------------
@@ -164,7 +164,8 @@ if (EXISTS ${_arena_sdk_conf})
     set(arena_sdk_FOUND true)
 
 else ()
-    message(FATAL_ERROR "ArenaSDK is not installed. Please install ArenaSDK "
+	message(WARNING "ArenaSDK is not installed. Please install ArenaSDK "
             "using the script provided by LUCID support "
             "team (support@thinklucid.com). ")
+    	set(ARENA_FOUND TRUE)
 endif ()

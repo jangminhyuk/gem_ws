@@ -30,7 +30,7 @@
 #include <sensor_msgs/msg/image.hpp>
 
 #include <Arena/ArenaApi.h>
-#include <image_geometry/pinhole_camera_model.h>
+#include <image_geometry/pinhole_camera_model.hpp>
 
 #include <chrono>
 #include <thread>

@@ -18,6 +18,7 @@
 #define BUILD_CAMERA_SETTINGS_H
 
 #include <iostream>
+#include <cstdint>
 #include <string>
 
 class CameraSetting

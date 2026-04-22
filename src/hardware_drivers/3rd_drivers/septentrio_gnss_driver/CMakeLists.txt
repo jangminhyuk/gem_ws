@@ -174,4 +174,5 @@ install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME}
 )
 
+add_compile_definitions(BOOST_BIND_GLOBAL_PLACEHOLDERS)
 ament_package()

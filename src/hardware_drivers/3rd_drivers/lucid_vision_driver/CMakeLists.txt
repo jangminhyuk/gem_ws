@@ -1,64 +1,86 @@
 cmake_minimum_required(VERSION 3.5)
 project(lucid_vision_driver)
 
-# Default to C++14
 if (NOT CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_STANDARD 14)
 endif ()
 
 set(CMAKE_CXX_FLAGS "-g3 -O3")
 
-# find dependencies
-find_package(ament_cmake_auto REQUIRED)
+find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(ament_lint_auto REQUIRED)
+find_package(rclcpp_components REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(camera_info_manager REQUIRED)
+find_package(image_geometry REQUIRED)
+find_package(image_transport REQUIRED)
 
+# --- EXACT PATHS FOR YOUR SYSTEM ---
+set(arena_sdk_INCLUDES 
+    "/opt/ArenaSDK/include"
+    "/opt/ArenaSDK/include/Arena"
+    "/opt/ArenaSDK/GenICam/library/CPP/include"
+)
 
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindARENA.cmake")
+set(arena_sdk_LIBRARIES 
+    "/opt/ArenaSDK/lib64/libarena.so"
+    "/opt/ArenaSDK/lib64/libsave.so"
+    "/opt/ArenaSDK/lib64/libgentl.so"
+)
 
-link_directories(${arena_sdk_LIBRARIES})
+add_library(arena_camera_node SHARED
+    src/arena_camera_node.cpp
+    src/arena_camera.cpp
+    src/arena_cameras_handler.cpp
+)
 
-ament_auto_find_build_dependencies()
+target_include_directories(arena_camera_node PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+    ${arena_sdk_INCLUDES}
+    ${OpenCV_INCLUDE_DIRS}
+)
 
-ament_auto_add_library(arena_camera_node SHARED
-        "include/arena_camera/arena_camera.h"
-        "include/arena_camera/arena_camera_node.h"
-        "include/arena_camera/arena_cameras_handler.h"
-        "include/arena_camera/camera_settings.h"
-        "src/arena_camera_node.cpp"
-        "src/arena_camera.cpp"
-        "src/arena_cameras_handler.cpp")
+ament_target_dependencies(arena_camera_node
+    rclcpp
+    rclcpp_components
+    sensor_msgs
+    cv_bridge
+    OpenCV
+    camera_info_manager
+    image_geometry
+    image_transport
+)
 
-## ArenaSDK is not handled by ament, so we need the manual steps below.
-target_include_directories(arena_camera_node
-        SYSTEM
-        PUBLIC
-        ${arena_sdk_INCLUDES}
-        ${OpenCV_INCLUDE_DIRS}
-        )
 target_link_libraries(arena_camera_node
-        ${OpenCV_LIBRARIES}
-        ${arena_sdk_LIBRARIES}
-        )
-
-# These are external libraries and include folders that we want to be visible to the packages
-# that depend on this one.
-ament_export_include_directories(${arena_sdk_INCLUDES})
-
-if (BUILD_TESTING)
-    find_package(ament_lint_auto REQUIRED)
-    ament_lint_auto_find_test_dependencies()
-endif ()
+    ${arena_sdk_LIBRARIES}
+)
 
 rclcpp_components_register_node(arena_camera_node
-        PLUGIN "ArenaCameraNode"
-        EXECUTABLE arena_camera_node_exe)
+    PLUGIN "ArenaCameraNode"
+    EXECUTABLE arena_camera_node_exe
+)
 
-ament_auto_package(INSTALL_TO_SHARE
-        launch
-        config
-        param
-        )
+install(TARGETS arena_camera_node
+    EXPORT export_lucid_vision_driver
+    DESTINATION lib
+)
+
+install(DIRECTORY include/ launch config param
+    DESTINATION share/${PROJECT_NAME}
+)
+
+ament_export_targets(export_lucid_vision_driver HAS_LIBRARY_TARGET)
+ament_export_dependencies(
+    rclcpp 
+    rclcpp_components 
+    sensor_msgs 
+    cv_bridge 
+    OpenCV 
+    camera_info_manager 
+    image_geometry 
+    image_transport
+)
+ament_package()
