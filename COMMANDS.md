@@ -88,8 +88,37 @@ at hardware ENU `(27.07, -11.17)` facing yaw `-0.07 rad` (≈ -4°).
 
 ## 3. Run on the real vehicle
 
-Open one terminal per launch (or use a tmux pane each). Each terminal
-needs `cd ~/CS588/group9/gem_ws && source install/setup.bash` first.
+### 3.a One-command launch (recommended)
+
+```bash
+bash ~/CS588/group9/gem_ws/src/utilities/run_stanley.sh
+```
+
+Opens 5 gnome-terminals in dependency order with small delays between
+them (~15 s total before the Stanley launch starts). Each terminal
+sources `install/setup.bash` and stays open after its launch exits so
+you can read errors.
+
+The script does **not** start CAN, plug in the joystick, or build the
+workspace — those are the §2 / §1 prereqs.
+
+Override the workspace path or per-step sleeps:
+
+```bash
+WORKSPACE=/some/other/gem_ws bash run_stanley.sh
+SLEEP_SENSORS=8 SLEEP_GNSS=8 bash run_stanley.sh
+```
+
+If `gnome-terminal` isn't available (non-GNOME desktop, headless box,
+remote SSH session), use §3.b manually instead.
+
+After all five terminals are up and clean, **arm with LB+RB** on the
+joystick to start tracking.
+
+### 3.b Manual launch (fallback / fine control)
+
+Open one terminal per launch (or a tmux pane each). Each terminal needs
+`cd ~/CS588/group9/gem_ws && source install/setup.bash` first.
 
 ### Terminal 1 — sensors
 ```bash
@@ -323,6 +352,7 @@ Plug in the joystick; verify with the pygame check in §2.a.
 |---|---|
 | Build | `colcon build --symlink-install --packages-select gem_gnss_control` |
 | Source | `source install/setup.bash` |
+| **One-command stack** | `bash ~/CS588/group9/gem_ws/src/utilities/run_stanley.sh` |
 | Sensors | `ros2 launch basic_launch sensor_init.launch.py` |
 | GNSS+RViz | `ros2 launch basic_launch visualization.launch.py` |
 | Joystick | `ros2 launch basic_launch dbw_joystick.launch.py` |
