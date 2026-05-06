@@ -16,12 +16,16 @@ actuation is gated behind the joystick arm sequence (LB+RB).
 | Piece | File | Notes |
 |---|---|---|
 | Reference trajectory | `src/vehicle_drivers/gem_gnss_control/waypoints/lane2_refined.csv` | 802 pts × 0.25 m, 200.25 m closed loop. Schema: `x, y, yaw_rad, s, kappa, v_ref`. Frame: local ENU about (40.092857, -88.235992) — derived from the lane2_2026-04-20 GNSS bag. |
-| Controller node | `src/vehicle_drivers/gem_gnss_control/gem_gnss_control/stanley.py` | Hoffmann's Stanley law (front-axle reference) + speed PID. Same I/O surface and joystick safety as the existing `pure_pursuit` node. |
+| Controller node | `src/vehicle_drivers/gem_gnss_control/gem_gnss_control/stanley.py` | Hoffmann's Stanley law (front-axle reference) + speed PID + Werling-style sampling replanner. Same I/O surface and joystick safety as the existing `pure_pursuit` node. |
+| Replanner module | `src/vehicle_drivers/gem_gnss_control/gem_gnss_control/sampling_replanner.py` | Pure-numpy Frenet sampler (225 candidates: 9 lateral × 5 speed × 5 accel) + 6-term cost evaluator. Constants tuned for the e4 (KAPPA_MAX = 0.27 1/m, V_MAX = 2.5 m/s). |
 | Launch | `src/vehicle_drivers/gem_gnss_control/launch/stanley.launch.py` | Loads `${VEHICLE_NAME:-e4}_stanley.yaml`. |
-| Per-vehicle config | `config/e4_stanley.yaml`, `config/e2_stanley.yaml` | Wheelbase, GPS antenna offset, Stanley gains, speed PID, ENU origin. |
+| Per-vehicle config | `config/e4_stanley.yaml`, `config/e2_stanley.yaml` | Wheelbase, GPS antenna offset, Stanley gains, speed PID, ENU origin, obstacle YAML. |
+| Obstacle config | `config/obstacles_lane2.yaml` | One static disc on the southern straight (see §9 for placement / GPS). |
 
-So: arm the joystick, the launch reads GPS+INS, and the e4 follows
-`lane2_refined.csv`. To use a different reference, see §5.
+So: arm the joystick, the launch reads GPS+INS, the replanner shifts
+the path laterally to dodge any known obstacles, and Stanley tracks the
+result. To use a different reference, see §5.  To add / move /
+remove obstacles, see §9.
 
 ---
 
@@ -343,6 +347,124 @@ Plug in the joystick; verify with the pygame check in §2.a.
 - `wheelbase` or `offset` in the yaml is wrong for this vehicle. Both
   affect where the controller thinks the front axle is.
 - Confirm with a direct measurement on the vehicle.
+
+---
+
+## 9. Obstacle avoidance (sampling replanner)
+
+`stanley_node` carries the same Werling-style sampling replanner the
+simulator uses.  Behaviour:
+
+1. On startup the node loads `obstacles_yaml` (default
+   `config/obstacles_lane2.yaml`) — one or more static / moving disks
+   in the same hardware ENU frame as `origin_lat/lon`.
+2. Every `1/replan_hz` seconds (default 5 Hz), the replanner samples
+   225 candidate trajectories in Frenet coordinates around the
+   reference, scores them on collision + goal + centerline + speed +
+   jerk + feasibility, and writes the best one back into
+   `(x, y, yaw, kappa, v_ref)` in the active arc-length window.
+3. Stanley tracks `self.plan` (the replanned path), which equals the
+   reference outside the active window.  No interface change inside
+   the controller.
+4. Replan only fires when at least one obstacle is within
+   `sensor_range` (default 30 m).  Outside that, Stanley tracks the
+   reference unchanged.
+
+### 9.a Pre-loaded obstacle (default)
+
+`config/obstacles_lane2.yaml` ships with **one static disc**, derived
+from the simulator's `obstacle_config.yaml` and converted into the
+hardware ENU frame.  Physical placement:
+
+| Quantity | Value |
+|---|---|
+| **GPS lat / lon (use a phone/GNSS to find this spot)** | **40.0927378° N, -88.2357399° W** |
+| Hardware ENU `(x, y)` | (21.4959 m, -13.2378 m) |
+| Disc radius | 0.75 m |
+| Position along reference | s ≈ 101.50 m (waypoint 406 of 802) |
+| Section of the loop | Southern straight, just past the right-hand U-turn |
+
+Place a real obstacle (cone / barrel / cardboard box ≥ 1.5 m tall and
+≥ 1.5 m wide so the lidar sees it cleanly) at that GPS point and the
+replanner will detour around it.
+
+### 9.b Adding / moving / removing obstacles
+
+Edit `config/obstacles_lane2.yaml`:
+
+```yaml
+obstacles:
+  - x: 21.4959      # hardware ENU (m)
+    y: -13.2378
+    radius: 0.75
+  # add another disc:
+  - x: -10.0
+    y: -28.0
+    radius: 1.0
+```
+
+Optional `vx, vy` fields (m/s in the hw ENU frame) enable the
+constant-velocity prediction for moving obstacles — leave them out for
+static obstacles.  After editing, `source install/setup.bash` is enough
+(yaml is symlink-installed); no rebuild needed.
+
+To compute the hw ENU position from a measured lat/lon, use the same
+formula `stanley.py` uses:
+
+```python
+import pymap3d as pm
+x, y, _ = pm.geodetic2enu(lat, lon, 0,
+                          40.092857,    # origin_lat (e4_stanley.yaml)
+                          -88.235992,   # origin_lon
+                          0)
+```
+
+### 9.c Disabling the replanner (pure path tracking)
+
+Edit `config/e4_stanley.yaml`:
+
+```yaml
+obstacles_yaml: ''     # ← empty string → replanner OFF
+```
+
+or just remove the `obstacles_lane2.yaml` file (the loader logs a
+warning and continues with no obstacles).  Stanley falls back to
+tracking `lane2_refined.csv` directly — same behaviour as before
+obstacle support was added.
+
+### 9.d Tuning knobs (yaml; no rebuild)
+
+| Param | Default | What it does |
+|---|---|---|
+| `obstacles_yaml` | `'obstacles_lane2.yaml'` | YAML to load on startup; empty string disables the replanner |
+| `replan_hz` | `5.0` | How often to call the replanner.  225 candidates × 41 timesteps × few obstacles is cheap, so 5–10 Hz is comfortable |
+| `sensor_range` | `30.0` m | Replan only when an obstacle is within this distance from the rear axle |
+
+Replanner internals — change in `gem_gnss_control/sampling_replanner.py`:
+| Constant | Default | What it does |
+|---|---|---|
+| `KAPPA_MAX` | `0.27` 1/m | Curvature feasibility cap; matches the e4 (`tan(0.61)/2.57`).  Raise → more aggressive maneuvers, but the e4 will saturate steering |
+| `V_MAX` | `2.5` m/s | Speed feasibility cap; raise to allow faster candidates |
+| `DEFAULT_LANE_OFFSETS` | `[-2.4, -1.6, -0.8, -0.4, 0, 0.4, 0.8, 1.6, 2.4]` m | Lateral candidate grid; widen for bigger obstacles, tighten for narrow lanes |
+| `HORIZON_S` | `4.0` s | Per-candidate planning horizon; raising plans further but slows the sampler |
+| `SPHERE_RADIUS` | `0.90` m | Body inflation; raise for a wider safety margin |
+| `HARD_CLEAR_M` | `0.20` m | Extra margin beyond `obstacle.r + sphere.r` |
+
+### 9.e What the replanner log looks like
+
+Every ~2 s `stanley_node` emits a line like:
+
+```
+replan(sampling): N=225 best#=98 cost=89.30 [col=0 goa=15.00 cen=0.32 jrk=0.005 fea=0.05]
+target(d=-0.80, v=1.50, a=+0.00) max|κ|=0.092 v_min=1.18
+d_obs_veh=12.4 s0=89.50 d0=+0.04 ok=Y obs:[@(+21.5,-13.2) r=0.75 v=(+0.00,+0.00)]
+```
+
+Read it as: `target(d=-0.80, ...)` means the chosen candidate offsets
+the path 0.80 m to the right of the centerline (negative `d` =
+right-hand offset in the path frame).  `ok=Y` means the chosen
+candidate is collision-free.  `ok=N` is logged at warn level — the
+plan still goes out, but the operator should be ready to disarm.
 
 ---
 

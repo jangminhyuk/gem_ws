@@ -38,6 +38,7 @@ import numpy as np
 import pygame
 import pymap3d as pm
 import scipy.signal as signal
+import yaml
 
 import rclpy
 from rclpy.node import Node
@@ -48,6 +49,8 @@ from septentrio_gnss_driver.msg import INSNavGeod
 from pacmod2_msgs.msg import (
     GlobalCmd, PositionWithSpeed, SystemCmdFloat, SystemCmdInt, VehicleSpeedRpt,
 )
+
+from .sampling_replanner import SamplingReplanner
 
 
 # Joystick safety enable — same import-time setup as pure_pursuit.py so the
@@ -134,6 +137,16 @@ class Stanley(Node):
 
         self.declare_parameter('waypoints_csv', 'lane2_refined.csv')
 
+        # Obstacle avoidance — leave `obstacles_yaml` empty to disable
+        # the replanner entirely (Stanley falls straight back to tracking
+        # `waypoints_csv`).  When set, the YAML must list one or more
+        # `{x, y, radius[, vx, vy]}` entries in the same ENU frame as
+        # `origin_lat/lon`.  Replanning runs at `replan_hz` and only when
+        # at least one obstacle is within `sensor_range`.
+        self.declare_parameter('obstacles_yaml', 'obstacles_lane2.yaml')
+        self.declare_parameter('replan_hz', 5.0)
+        self.declare_parameter('sensor_range', 30.0)
+
         gp = lambda n: self.get_parameter(n).value
         self.rate_hz       = int(gp('rate_hz'))
         self.wheelbase     = float(gp('wheelbase'))
@@ -195,6 +208,42 @@ class Stanley(Node):
             f"Loaded {len(self.path)} waypoints "
             f"(v_ref column: {'yes' if self.has_v_ref else 'no'}).")
 
+        # ─── obstacle avoidance setup ──────────────────────────────────
+        # Stanley always tracks self.plan; without obstacles it's just a
+        # copy of self.path, so the no-obstacle behaviour is unchanged.
+        self.plan = self.path.copy()
+        self.s_cur = 0.0
+        self.replanner = None
+        self.obstacles = []
+        self._last_replan_t = 0.0
+        self._replan_period = 1.0 / max(0.1, float(gp('replan_hz')))
+        self._sensor_range = float(gp('sensor_range'))
+
+        obs_path = gp('obstacles_yaml')
+        if obs_path and self.has_v_ref:
+            self.obstacles = self._load_obstacles(obs_path)
+            if self.obstacles:
+                self.replanner = SamplingReplanner(
+                    self.path, sensor_range=self._sensor_range)
+                obs_log = ", ".join(
+                    f"({o['x']:+.2f}, {o['y']:+.2f}) r={o['r']:.2f}"
+                    for o in self.obstacles)
+                self.get_logger().info(
+                    f"Replanner ON — {len(self.obstacles)} obstacle(s): "
+                    f"{obs_log}; replan @ {gp('replan_hz')} Hz, "
+                    f"sensor_range = {self._sensor_range} m")
+            else:
+                self.get_logger().info(
+                    f"Obstacles YAML '{obs_path}' had no entries — "
+                    "replanner disabled.")
+        elif obs_path and not self.has_v_ref:
+            self.get_logger().warn(
+                "Replanner needs a 6-column waypoints CSV (x,y,yaw,s,kappa,v_ref). "
+                "Disabled — falling back to direct path tracking.")
+        else:
+            self.get_logger().info(
+                "obstacles_yaml param empty — replanner disabled.")
+
         self.timer = self.create_timer(1.0 / self.rate_hz, self.control_loop)
 
     # ─── waypoint loader ─────────────────────────────────────────────────
@@ -240,6 +289,45 @@ class Stanley(Node):
             )
             arr = np.column_stack([arr[:, 0], arr[:, 1], yaw])
         return arr
+
+    def _load_obstacles(self, yaml_arg: str) -> list:
+        """Resolve YAML path the same way `_load_waypoints` does, then
+        parse `obstacles: [...]` into the dict format the replanner
+        expects: `{x, y, r, vx, vy}` (vx/vy default to 0)."""
+        path = yaml_arg
+        if not os.path.isabs(path):
+            from ament_index_python.packages import get_package_share_directory
+            try:
+                share = get_package_share_directory('gem_gnss_control')
+                cand = os.path.join(share, 'config', path)
+                if os.path.exists(cand):
+                    path = cand
+            except Exception:
+                pass
+            if not os.path.isabs(path) or not os.path.exists(path):
+                here = os.path.dirname(os.path.abspath(__file__))
+                path = os.path.join(here, '..', 'config', yaml_arg)
+
+        if not os.path.exists(path):
+            self.get_logger().warn(f"Obstacles YAML not found: {path}")
+            return []
+
+        with open(path, 'r') as f:
+            cfg = yaml.safe_load(f) or {}
+        raw = cfg.get('obstacles', [])
+        out = []
+        for entry in raw:
+            try:
+                out.append({
+                    'x':  float(entry['x']),
+                    'y':  float(entry['y']),
+                    'r':  float(entry.get('radius', entry.get('r', 0.5))),
+                    'vx': float(entry.get('vx', 0.0)),
+                    'vy': float(entry.get('vy', 0.0)),
+                })
+            except (KeyError, TypeError, ValueError) as e:
+                self.get_logger().warn(f"Skipping bad obstacle entry {entry}: {e}")
+        return out
 
     # ─── callbacks ───────────────────────────────────────────────────────
     def gnss_cb(self, msg: NavSatFix):
@@ -339,19 +427,47 @@ class Stanley(Node):
         # ─── Stanley step ─────────────────────────────────────────────
         rear_x, rear_y, yaw = self.get_gem_state()
 
+        # ─── Replanner tick (rate-limited) ────────────────────────────
+        # Modifies self.plan in the active window when at least one
+        # obstacle is within sensor_range of the rear axle; otherwise
+        # the plan stays equal to the reference path.
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if (self.replanner is not None
+                and now - self._last_replan_t >= self._replan_period):
+            try:
+                result = self.replanner.replan(
+                    rear_x, rear_y, yaw, self.speed,
+                    self.obstacles,
+                    seed_s=self.s_cur if self.s_cur > 1e-6 else None,
+                )
+                self.plan = result.plan
+                self._last_replan_t = now
+                if result.detour_ok:
+                    self.get_logger().info(result.log,
+                                            throttle_duration_sec=2.0)
+                else:
+                    self.get_logger().warn(result.log,
+                                            throttle_duration_sec=1.0)
+            except Exception as e:
+                self.get_logger().warn(
+                    f"Replanner failed: {e} — falling back to last good plan",
+                    throttle_duration_sec=2.0)
+
         # Hoffmann references the FRONT axle, not the rear.
         fa_x = rear_x + self.wheelbase * math.cos(yaw)
         fa_y = rear_y + self.wheelbase * math.sin(yaw)
 
-        # Nearest reference point to the front axle.  Global argmin is fine
-        # at 50 Hz with O(800) waypoints; switch to a windowed search if
-        # the path grows much beyond that.
-        d2 = (self.path[:, 0] - fa_x) ** 2 + (self.path[:, 1] - fa_y) ** 2
+        # Nearest reference point to the front axle.  Stanley tracks
+        # self.plan (= self.path when there's no active detour, or the
+        # replanner's modified path inside the active window).
+        d2 = (self.plan[:, 0] - fa_x) ** 2 + (self.plan[:, 1] - fa_y) ** 2
         idx = int(np.argmin(d2))
+        if self.has_v_ref:
+            self.s_cur = float(self.plan[idx, 3])
 
-        px       = float(self.path[idx, 0])
-        py       = float(self.path[idx, 1])
-        plan_yaw = float(self.path[idx, 2])
+        px       = float(self.plan[idx, 0])
+        py       = float(self.plan[idx, 1])
+        plan_yaw = float(self.plan[idx, 2])
 
         # Cross-track error in the path frame.
         # path left-normal: n = (-sin θ, cos θ); e_left = (front - p) · n
@@ -379,7 +495,7 @@ class Stanley(Node):
         self.steer_pub.publish(self.steer_cmd)
 
         # Per-waypoint speed reference if available, capped by config.
-        v_ref = float(self.path[idx, 5]) if self.has_v_ref else self.desired_speed
+        v_ref = float(self.plan[idx, 5]) if self.has_v_ref else self.desired_speed
         v_ref = max(0.0, min(self.desired_speed, v_ref))
 
         now = self.get_clock().now().nanoseconds * 1e-9

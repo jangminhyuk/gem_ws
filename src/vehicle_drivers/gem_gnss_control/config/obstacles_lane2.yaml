@@ -1,0 +1,28 @@
+# Obstacles for the lane2_refined.csv reference (hardware ENU frame
+# centred on origin lat=40.092857, lon=-88.235992, the same origin used
+# by e4_stanley.yaml).
+#
+# Each entry is treated as a static disc by the sampling replanner:
+#   x, y     — centre in hardware ENU (m)
+#   radius   — disc radius (m)
+#   vx, vy   — optional, defaults to 0 (static)
+#
+# To add an obstacle: drop a new entry under `obstacles:`.  To temporarily
+# disable obstacle avoidance, set the `obstacles_yaml` param in
+# e4_stanley.yaml to '' (empty string).
+#
+# Real-world placement of the entry below:
+#   GPS  : lat=40.0927378, lon=-88.2357399  (use any GPS-equipped device
+#          to find this spot in the highbay; place the obstacle there)
+#   Origin used:  lat=40.092857, lon=-88.235992
+#   Source: derived from the simulator's obstacle_config.yaml entry
+#           (sim ENU 2.108, -30.620), converted via:
+#             sim ENU → WGS84 → hardware ENU
+#           The position lands at s ≈ 101.50 m along lane2_refined.csv
+#           (waypoint #406 of 802), which is the southern straight just
+#           past the right-hand U-turn.
+
+obstacles:
+  - x: 21.4959
+    y: -13.2378
+    radius: 0.75
