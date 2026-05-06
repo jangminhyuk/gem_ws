@@ -90,87 +90,120 @@ at hardware ENU `(27.07, -11.17)` facing yaw `-0.07 rad` (≈ -4°).
 
 ---
 
-## 3. Run on the real vehicle
+## 3. Run on the real vehicle — TWO EXPERIMENTS
 
-### 3.a One-command launch (recommended)
+There are two intended experiments, both running on the same workspace.
+The only difference is whether the obstacle-avoidance replanner is
+active.
 
-```bash
-bash ~/CS588/group9/gem_ws/src/utilities/run_stanley.sh
-```
+### → Experiment 1 — pure trajectory tracking (NO obstacle)
 
-Opens 5 gnome-terminals in dependency order with small delays between
-them (~15 s total before the Stanley launch starts). Each terminal
-sources `install/setup.bash` and stays open after its launch exits so
-you can read errors.
-
-The script does **not** start CAN, plug in the joystick, or build the
-workspace — those are the §2 / §1 prereqs.
-
-Override the workspace path or per-step sleeps:
+The vehicle follows `lane2_refined.csv` with Stanley alone.  The
+replanner is disabled; no obstacle in the highbay.
 
 ```bash
-WORKSPACE=/some/other/gem_ws bash run_stanley.sh
-SLEEP_SENSORS=8 SLEEP_GNSS=8 bash run_stanley.sh
+bash ~/CS588/group9/gem_ws/src/utilities/run_stanley.sh no_obstacle
 ```
 
-If `gnome-terminal` isn't available (non-GNOME desktop, headless box,
-remote SSH session), use §3.b manually instead.
+That's it.  This opens the 5-terminal stack with the Stanley launch
+overridden to `obstacles_yaml:=''` (replanner OFF — pure path
+tracking).  After the terminals come up, arm with **LB + RB** on the
+joystick.  Expected behaviour: the e4 follows the 200 m loop, brakes to
+a stop in the last 5 m of the loop (the v_ref ramp at the end of the
+CSV).
 
-After all five terminals are up and clean, **arm with LB+RB** on the
-joystick to start tracking.
+### → Experiment 2 — trajectory tracking WITH obstacle (replanner ON)
 
-### 3.b Manual launch (fallback / fine control)
+A real obstacle is placed in the highbay at the GPS coordinate below;
+the replanner shifts the path laterally to detour around it.
 
-Open one terminal per launch (or a tmux pane each). Each terminal needs
-`cd ~/CS588/group9/gem_ws && source install/setup.bash` first.
+**Step 1 — physically place the obstacle.**  Go to this GPS point in
+the highbay (use a phone GPS, RTK, or your hand-held GNSS receiver):
 
-### Terminal 1 — sensors
+| Quantity | Value |
+|---|---|
+| **GPS** | **lat 40.0927378° N, lon -88.2357399° W** |
+| Hardware ENU `(x, y)` | `(21.4959 m, -13.2378 m)` |
+| Disc radius (in `obstacles_lane2.yaml`) | 0.75 m |
+| Position along reference | s ≈ 101.50 m, southern straight just past the right-hand U-turn |
+
+A traffic cone, barrel, or 1.5 m × 1.5 m cardboard box works.  Centre
+the obstacle on that GPS point — the replanner's collision check uses
+its centre + 0.75 m radius.  If you can only place a smaller object,
+edit `radius` in `config/obstacles_lane2.yaml` (§9) to match.
+
+**Step 2 — bring up the stack with the replanner active.**
+
 ```bash
-ros2 launch basic_launch sensor_init.launch.py
+bash ~/CS588/group9/gem_ws/src/utilities/run_stanley.sh with_obstacle
 ```
 
-### Terminal 2 — GNSS + RViz
-```bash
-ros2 launch basic_launch visualization.launch.py
-```
+(or just `bash run_stanley.sh` — `with_obstacle` is the default.)
 
-### Terminal 3 — joystick driver
-```bash
-ros2 launch basic_launch dbw_joystick.launch.py
-```
+After the terminals come up, arm with **LB + RB**.  Expected
+behaviour: as the e4 approaches s ≈ 90 m, the replanner picks a
+lateral offset (logged as `target(d=±0.x, ...)`), Stanley tracks the
+shifted path around the cone, and the vehicle returns to the
+centerline once the obstacle is past.  If the chosen candidate is
+collision-free, the log line is **info** level with `ok=Y`.  If the
+replanner can't find a clean detour, the log goes **warn** with `ok=N`
+— the safety speed cap will brake the vehicle to 0 before the
+obstacle.  Be ready to disarm.
 
-### Terminal 4 — PACMod (drive-by-wire)
-```bash
-ros2 launch pacmod2 pacmod2.launch.xml
-```
+### Arming, disarming, shutdown (same for both experiments)
 
-### Terminal 5 — Stanley path tracker
-```bash
-ros2 launch gem_gnss_control stanley.launch.py
-```
+- **Arm**: hold **LB + RB** simultaneously on the joystick.
+- **Disarm**: release RB and keep LB held → node logs `Pacmod
+  disabled by joystick` and stops publishing.
+- **E-stop**: any time, hit the kill switch for a hardware cutoff.
+- **Shutdown**: disarm first, then Ctrl-C each terminal in reverse
+  order (Stanley → pacmod → joystick → GNSS → sensors), then stop CAN
+  if you started it manually.
 
-The node logs once every ~0.5 s after it's enabled:
+The Stanley node logs ~2 Hz once enabled.  Without the replanner:
 ```
 x= 27.07 y=-11.17 yaw= -4.2° | e_fa=+0.12 ψe=+0.5° | δ=+1.2° sw= +25.0° | v=1.50 v_ref=1.50 thr=0.18
 ```
+With the replanner active you'll also see, every ~2 s:
+```
+replan(sampling): N=225 best#=98 cost=89.30 [col=0 goa=15.00 cen=0.32 jrk=0.005 fea=0.05] target(d=-0.80, v=1.50, a=+0.00) max|κ|=0.092 v_min=1.18 d_obs_veh=12.4 s0=89.50 d0=+0.04 ok=Y obs:[@(+21.5,-13.2) r=0.75 v=(+0.00,+0.00)]
+```
 
-### Arming
-1. Verify all five terminals above are running with no errors.
-2. Stand clear of the vehicle. Have someone hold the e-stop ready.
-3. On the joystick, press and hold **LB + RB simultaneously**.
-4. The Stanley node logs `Pacmod arming: enable + forward gear`. The
-   vehicle starts following the loop.
+### What the launcher actually does
 
-### Disarming
-- Release RB (keep LB held) → node logs `Pacmod disabled by joystick`,
-  publishes the disable command, and stops sending steering/throttle.
-- Or hit the e-stop / kill switch for a hardware-level cutoff.
+`run_stanley.sh` opens 5 gnome-terminals in dependency order with
+small delays (~15 s total) between them, each sourcing
+`install/setup.bash`.  Each terminal stays open after its launch exits
+so you can see errors.
 
-### Shutdown
-- Disarm via joystick first.
-- Ctrl-C each terminal in reverse order: Stanley → pacmod → joystick →
-  GNSS → sensors.
-- Stop CAN if you started it manually.
+Prereqs the script does NOT do for you:
+- CAN bus must already be up (§2.b).
+- Joystick must be plugged in (§2.a).
+- Workspace must already be built (§1).  The script aborts with a
+  clear error if `install/setup.bash` is missing.
+
+Useful env-var overrides:
+```bash
+WORKSPACE=/some/other/gem_ws bash run_stanley.sh no_obstacle
+SLEEP_SENSORS=8 SLEEP_GNSS=8 bash run_stanley.sh with_obstacle
+```
+
+If `gnome-terminal` isn't available (non-GNOME desktop, headless box,
+remote SSH session), use §3.x manual launch below.
+
+### 3.x Manual launch (fallback for non-GNOME or fine control)
+
+Open one terminal per launch (or a tmux pane each).  Each needs
+`cd ~/CS588/group9/gem_ws && source install/setup.bash` first.
+
+| # | Launch |
+|---|---|
+| 1 | `ros2 launch basic_launch sensor_init.launch.py` |
+| 2 | `ros2 launch basic_launch visualization.launch.py` |
+| 3 | `ros2 launch basic_launch dbw_joystick.launch.py` |
+| 4 | `ros2 launch pacmod2 pacmod2.launch.xml` |
+| 5a | **Experiment 1**: `ros2 launch gem_gnss_control stanley.launch.py obstacles_yaml:=''` |
+| 5b | **Experiment 2**: `ros2 launch gem_gnss_control stanley.launch.py` |
 
 ---
 
@@ -474,12 +507,14 @@ plan still goes out, but the operator should be ready to disarm.
 |---|---|
 | Build | `colcon build --symlink-install --packages-select gem_gnss_control` |
 | Source | `source install/setup.bash` |
-| **One-command stack** | `bash ~/CS588/group9/gem_ws/src/utilities/run_stanley.sh` |
+| **Experiment 1 — no obstacle** | `bash ~/CS588/group9/gem_ws/src/utilities/run_stanley.sh no_obstacle` |
+| **Experiment 2 — with obstacle** | `bash ~/CS588/group9/gem_ws/src/utilities/run_stanley.sh with_obstacle` |
 | Sensors | `ros2 launch basic_launch sensor_init.launch.py` |
 | GNSS+RViz | `ros2 launch basic_launch visualization.launch.py` |
 | Joystick | `ros2 launch basic_launch dbw_joystick.launch.py` |
 | PACMod | `ros2 launch pacmod2 pacmod2.launch.xml` |
-| Stanley | `ros2 launch gem_gnss_control stanley.launch.py` |
+| Stanley (with obstacle) | `ros2 launch gem_gnss_control stanley.launch.py` |
+| Stanley (no obstacle) | `ros2 launch gem_gnss_control stanley.launch.py obstacles_yaml:=''` |
 | Pure pursuit | `ros2 launch gem_gnss_control pure_pursuit.launch.py` |
 | Switch vehicle | `export VEHICLE_NAME=e2` (or `e4`) before launching |
 | Inspect topic | `ros2 topic echo <topic> --once` |
