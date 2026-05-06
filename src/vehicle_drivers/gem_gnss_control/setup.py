@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'config'), glob(os.path.join('config', '*.yaml'))),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*.py'))),
+        (os.path.join('share', package_name, 'waypoints'), glob(os.path.join('waypoints', '*.csv'))),
 
     ],
     install_requires=['setuptools'],
@@ -27,6 +28,7 @@ setup(
         'console_scripts': [
             'pure_pursuit = gem_gnss_control.pure_pursuit:main',
             'pure_pursuit_test = gem_gnss_control.pure_pursuit_test:main',
+            'stanley = gem_gnss_control.stanley:main',
         ],
     },
 )

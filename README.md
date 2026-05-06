@@ -53,3 +53,31 @@ source install/setup.bash
 ros2 run gem_gnss_control pure_pursuit
 ```
 
+# launch Stanley path tracking controller (alternative to pure_pursuit)
+**IMPORTANT**: same prerequisites as pure_pursuit — heading must be correct,
+joystick control must be disabled, and pacmod2 must be running.
+
+```bash
+source install/setup.bash
+ros2 launch gem_gnss_control stanley.launch.py
+```
+
+The Stanley node uses the same `/navsatfix`, `/insnavgeod`,
+`/pacmod/vehicle_speed_rpt`, `/pacmod/enabled` inputs and the same
+`/pacmod/{global,shift,brake,accel,turn,steering}_cmd` outputs as
+`pure_pursuit`, plus the same LB/RB joystick arm gate (LB+RB = arm,
+LB alone = disarm).
+
+Per-vehicle config: `config/e4_stanley.yaml` and `config/e2_stanley.yaml`,
+selected by the `VEHICLE_NAME` env var (default `e4`).  The waypoints
+file defaults to `waypoints/lane2_refined.csv` — a 200 m loop derived
+from the lane2 GNSS bag in the hardware ENU frame
+(origin lat=40.092857, lon=-88.235992).  Two CSV schemas are accepted:
+`(x, y, heading_deg)` like the existing `track.csv`, or the 6-column
+`(x, y, yaw, s, kappa, v_ref)` produced by the simulator's
+`refine_trajectory.py` (in which case `v_ref` becomes the per-waypoint
+speed reference, capped at `desired_speed`).
+
+To regenerate `lane2_refined.csv` from a different ROS 2 bag, see
+section 5 of `~/gem_simulation_ws/COMMANDS.md`.
+

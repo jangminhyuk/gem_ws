@@ -1,0 +1,25 @@
+stanley_node:
+  ros__parameters:
+    vehicle_name: 'e4'
+    rate_hz: 50
+    wheelbase: 2.57
+    offset: 1.26
+    origin_lat: 40.092857
+    origin_lon: -88.235992
+    desired_speed: 2.0
+    max_acceleration: 0.5
+    waypoints_csv: 'lane2_refined.csv'
+    stanley:
+      k: 0.45
+      k_soft: 0.5
+      delta_max: 0.61
+      delta_rate: 1.5
+    pid:
+      kp: 0.6
+      ki: 0.0
+      kd: 0.1
+      wg: 10.0
+    filter:
+      cutoff: 1.2
+      fs: 30.0
+      order: 4
